@@ -1,0 +1,4 @@
+#ifndef MODBUS_RTU_INCLUDE
+#define MODBUS_RTU_INCLUDE
+
+#endif
