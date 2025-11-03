@@ -139,6 +139,6 @@ void app_main(void)
     ESP_ERROR_CHECK(start_modbus_task());
     
     ESP_LOGI(TAG, "╔════════════════════════════════════════╗");
-    ESP_LOGI(TAG, "║   Hệ thống đã khởi động hoàn tất      ║");
+    ESP_LOGI(TAG, "║   Hệ thống đã khởi động hoàn tất       ║");
     ESP_LOGI(TAG, "╚════════════════════════════════════════╝");
 }

@@ -40,7 +40,11 @@ void cb_connection_ok(void *pvParameter){
  * @brief Callback function khi WiFi STA bị ngắt kết nối
  */
 void cb_connection_lost(void *pvParameter){
-    ESP_LOGW(TAG, "✗ WiFi STA bị ngắt kết nối");
+    static uint8_t disconnect_count = 0;
+    disconnect_count++;
+    
+    ESP_LOGW(TAG, "✗ WiFi STA bị ngắt kết nối (lần %d)", disconnect_count);
+    ESP_LOGW(TAG, "→ WiFi Manager sẽ retry tối đa 3 lần trước khi start AP Mode");
     
     // Set event để báo cho Modbus Task biết WiFi bị ngắt
     if (app_event_group != NULL) {
@@ -49,7 +53,7 @@ void cb_connection_lost(void *pvParameter){
         ESP_LOGW(TAG, "→ Event WIFI_DISCONNECTED_BIT đã được set");
     }
 }
-
+        
 /**
  * @brief Callback function khi AP Mode được khởi động
  */

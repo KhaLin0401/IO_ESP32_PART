@@ -35,9 +35,10 @@ static void *slave_handle = NULL;
 
 // Config
 #define MODBUS_TASK_STACK_SIZE    (4096)
-#define MODBUS_TASK_PRIORITY      (5)
+#define MODBUS_TASK_PRIORITY      (6)  // Tăng từ 5 lên 6 để ưu tiên cao hơn WiFi task
 #define MODBUS_POLL_TIMEOUT_MS    (100)
 #define MODBUS_UPDATE_INTERVAL_MS (1000)
+#define MODBUS_LOOP_DELAY_MS      (1)  // Giảm từ 10ms xuống 1ms để responsive hơn
 
 // Forward declarations
 static void modbus_task(void *pvParameters);
@@ -167,21 +168,31 @@ static void modbus_task(void *pvParameters)
         ESP_LOGI(TAG, "✓ Modbus TCP Slave đang chạy");
 
         // === BƯỚC 3: Main Loop - Poll Modbus & Monitor WiFi ===
+        uint32_t wifi_check_counter = 0;
         while (!(xEventGroupGetBits(modbus_event_group) & MODBUS_STOP_BIT)) {
             
-            // Kiểm tra WiFi có bị ngắt kết nối không
-            wifi_bits = xEventGroupGetBits(app_event_group);
-            if (wifi_bits & WIFI_DISCONNECTED_BIT) {
-                ESP_LOGW(TAG, "⚠ WiFi bị ngắt kết nối, dừng Modbus và chờ kết nối lại...");
-                break; // Thoát loop để cleanup và restart
+            // Kiểm tra WiFi mỗi 100 lần loop (giảm overhead)
+            if (++wifi_check_counter >= 100) {
+                wifi_check_counter = 0;
+                wifi_bits = xEventGroupGetBits(app_event_group);
+                if (wifi_bits & WIFI_DISCONNECTED_BIT) {
+                    ESP_LOGW(TAG, "⚠ WiFi bị ngắt kết nối, dừng Modbus và chờ kết nối lại...");
+                    break; // Thoát loop để cleanup và restart
+                }
             }
 
             // Check for Modbus events
+            TickType_t event_start = xTaskGetTickCount();
             event = mbc_slave_check_event(slave_handle, MB_EVENT_HOLDING_REG_WR | MB_EVENT_INPUT_REG_RD | 
                                           MB_EVENT_HOLDING_REG_RD | MB_EVENT_COILS_WR | 
                                           MB_EVENT_COILS_RD | MB_EVENT_DISCRETE_RD);
             
             if (event) {
+                TickType_t event_duration = xTaskGetTickCount() - event_start;
+                if (event_duration > pdMS_TO_TICKS(50)) {
+                    ESP_LOGW(TAG, "⚠ Event processing took %d ms", (int)pdTICKS_TO_MS(event_duration));
+                }
+                
                 ESP_LOGD(TAG, "Modbus event: 0x%x", (int)event);
                 
                 // Handle specific events if needed
@@ -199,7 +210,7 @@ static void modbus_task(void *pvParameters)
                 last_update = now;
             }
 
-            vTaskDelay(pdMS_TO_TICKS(10));
+            vTaskDelay(pdMS_TO_TICKS(MODBUS_LOOP_DELAY_MS));
         }
 
         // === BƯỚC 4: Cleanup ===
