@@ -182,17 +182,17 @@ extern "C" {
 /**
  * @brief Defines the maximum length in bytes of a JSON representation of the IP information
  * assuming all ips are 4*3 digits, and all characters in the ssid require to be escaped.
- * example: {"ssid":"abcdefghijklmnopqrstuvwxyz012345","ip":"192.168.1.119","netmask":"255.255.255.0","gw":"192.168.1.1","urc":99}
+ * example: {"ssid":"abcdefghijklmnopqrstuvwxyz012345","ip":"192.168.1.119","netmask":"255.255.255.0","gw":"192.168.1.1","ip_mode":"static","urc":99}
  * Run this JS (browser console is easiest) to come to the conclusion that 159 is the worst case.
  * ```
- * var a = {"ssid":"abcdefghijklmnopqrstuvwxyz012345","ip":"255.255.255.255","netmask":"255.255.255.255","gw":"255.255.255.255","urc":99};
+ * var a = {"ssid":"abcdefghijklmnopqrstuvwxyz012345","ip":"255.255.255.255","netmask":"255.255.255.255","gw":"255.255.255.255","ip_mode":"static","urc":99};
  * // Replace all ssid characters with a double quote which will have to be escaped
  * a.ssid = a.ssid.split('').map(() => '"').join('');
- * console.log(JSON.stringify(a).length); // => 158 +1 for null
+ * console.log(JSON.stringify(a).length); // => 176 +1 for null
  * console.log(JSON.stringify(a)); // print it
  * ```
  */
-#define JSON_IP_INFO_SIZE 					159
+#define JSON_IP_INFO_SIZE 					180
 
 
 /**
@@ -408,6 +408,21 @@ char* wifi_manager_get_sta_ip_string();
  * @brief thread safe char representation of the STA IP update
  */
 void wifi_manager_safe_update_sta_ip_string(uint32_t ip);
+
+/**
+ * @brief Set static IP configuration for STA interface
+ * @param ip IP address string (e.g., "192.168.1.100")
+ * @param netmask Netmask string (e.g., "255.255.255.0")
+ * @param gw Gateway string (e.g., "192.168.1.1")
+ * @return ESP_OK on success, ESP_FAIL on error
+ */
+esp_err_t wifi_manager_set_static_ip_config(const char* ip, const char* netmask, const char* gw);
+
+/**
+ * @brief Enable DHCP for STA interface
+ * @return ESP_OK on success, ESP_FAIL on error
+ */
+esp_err_t wifi_manager_enable_dhcp(void);
 
 
 /**

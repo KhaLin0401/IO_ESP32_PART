@@ -23,6 +23,7 @@ function docReady(fn) {
 var selectedSSID = "";
 var refreshAPInterval = null;
 var checkStatusInterval = null;
+var lastKnownIpMode = null; // Track the last known IP mode from server
 
 function stopCheckStatusInterval() {
   if (checkStatusInterval != null) {
@@ -181,6 +182,78 @@ docReady(async function () {
     wifi_div.style.display = "block";
   });
 
+  // IP Configuration event listeners
+  gel("save-static-ip").addEventListener("click", async () => {
+    const mode = gel("static-mode").checked ? "static" : "dhcp";
+    const staticIp = gel("static-ip-input").value;
+    
+    let config = { mode: mode };
+    
+    if(mode === "static") {
+      if(!staticIp || staticIp.trim() === "") {
+        alert("Please enter a valid Static IP address");
+        return;
+      }
+      
+      // Parse IP address (simple validation)
+      const ipParts = staticIp.split('.');
+      if(ipParts.length !== 4) {
+        alert("Invalid IP address format. Use format: 192.168.1.100");
+        return;
+      }
+      
+      // For simplicity, use default netmask and gateway based on IP
+      const baseIp = ipParts[0] + '.' + ipParts[1] + '.' + ipParts[2];
+      config.ip = staticIp;
+      config.netmask = "255.255.255.0";
+      config.gw = baseIp + ".1";
+    }
+    
+    try {
+      const response = await fetch("ip-config.json", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(config)
+      });
+      
+      if(response.ok) {
+        // Update lastKnownIpMode to the new mode after successful save
+        lastKnownIpMode = mode;
+        
+        alert(mode === "static" ? 
+          "Static IP configured successfully!\nIP: " + config.ip + "\nNetmask: " + config.netmask + "\nGateway: " + config.gw :
+          "DHCP enabled successfully!");
+        
+        // Refresh status to show new IP
+        await checkStatus();
+      } else {
+        alert("Failed to configure IP. Please check your settings.");
+      }
+    } catch(e) {
+      console.error("Error configuring IP:", e);
+      alert("Error configuring IP: " + e.message);
+    }
+  });
+  
+  // Radio button change handlers
+  gel("dhcp-mode").addEventListener("change", () => {
+    if(gel("dhcp-mode").checked) {
+      gel("static-ip-input").disabled = true;
+      gel("static-ip-input").style.backgroundColor = "#f0f0f0";
+      // Don't update lastKnownIpMode here - let user configure first
+    }
+  });
+  
+  gel("static-mode").addEventListener("change", () => {
+    if(gel("static-mode").checked) {
+      gel("static-ip-input").disabled = false;
+      gel("static-ip-input").style.backgroundColor = "#fff";
+      // Don't update lastKnownIpMode here - let user configure first
+    }
+  });
+
   //first time the page loads: attempt get the connection status and start the wifi scan
   await refreshAP();
   startCheckStatusInterval();
@@ -276,6 +349,13 @@ async function checkStatus(url = "status.json") {
   try {
     var response = await fetch(url);
     var data = await response.json();
+    
+    // Always update IP mode display first if data is available
+    // This is done once per checkStatus call
+    if (data && data.hasOwnProperty("ip_mode")) {
+      updateIpModeDisplay(data);
+    }
+    
     if (data && data.hasOwnProperty("ssid") && data["ssid"] != "") {
       if (data["ssid"] === selectedSSID) {
         // Attempting connection
@@ -291,6 +371,9 @@ async function checkStatus(url = "status.json") {
             gel("netmask").textContent = data["netmask"];
             gel("gw").textContent = data["gw"];
             gel("wifi-status").style.display = "block";
+            
+            // Update current IP display
+            gel("current-ip-display").value = data["ip"];
 
             //unlock the wait screen if needed
             gel("ok-connect").disabled = false;
@@ -338,15 +421,56 @@ async function checkStatus(url = "status.json") {
           gel("netmask").textContent = data["netmask"];
           gel("gw").textContent = data["gw"];
           gel("wifi-status").style.display = "block";
+          
+          // Update current IP display
+          gel("current-ip-display").value = data["ip"];
         }
       }
-    } else if (data.hasOwnProperty("urc") && data["urc"] === 2) {
+    } else if (data && data.hasOwnProperty("urc") && data["urc"] === 2) {
       console.log("Manual disconnect requested...");
       if (gel("wifi-status").style.display == "block") {
         gel("wifi-status").style.display = "none";
       }
+      // Clear current IP display
+      gel("current-ip-display").value = "Not connected";
+    }
+    
+    // If no connection, show "Not connected"
+    if (!data || !data.hasOwnProperty("ssid") || data["ssid"] === "" || data["urc"] !== 0) {
+      gel("current-ip-display").value = "Not connected";
     }
   } catch (e) {
     console.info("Was not able to fetch /status.json");
+  }
+}
+
+// Helper function to update IP mode display based on server data
+function updateIpModeDisplay(data) {
+  if (data && data.hasOwnProperty("ip_mode")) {
+    const ipMode = data["ip_mode"];
+    
+    // Only update if the mode has changed from server side
+    // This prevents overwriting user's selection while they're configuring
+    if (lastKnownIpMode !== ipMode) {
+      console.info("IP Mode from server changed to:", ipMode);
+      lastKnownIpMode = ipMode;
+      
+      if (ipMode === "dhcp") {
+        gel("dhcp-mode").checked = true;
+        gel("static-mode").checked = false;
+        gel("static-ip-input").disabled = true;
+        gel("static-ip-input").style.backgroundColor = "#f0f0f0";
+      } else if (ipMode === "static") {
+        gel("static-mode").checked = true;
+        gel("dhcp-mode").checked = false;
+        gel("static-ip-input").disabled = false;
+        gel("static-ip-input").style.backgroundColor = "#fff";
+        
+        // Optionally populate static IP input with current IP if connected
+        if (data.hasOwnProperty("ip") && data["ip"] !== "0" && data["ip"] !== "0.0.0.0") {
+          gel("static-ip-input").value = data["ip"];
+        }
+      }
+    }
   }
 }

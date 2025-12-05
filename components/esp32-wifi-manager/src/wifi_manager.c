@@ -52,6 +52,7 @@ Contains the freeRTOS task and all necessary support
 #include "lwip/api.h"
 #include "lwip/err.h"
 #include "lwip/netdb.h"
+#include <arpa/inet.h>
 #include "lwip/ip4_addr.h"
 
 
@@ -272,7 +273,9 @@ esp_err_t wifi_manager_save_sta_config(){
 				tmp_settings.ap_bandwidth != wifi_settings.ap_bandwidth ||
 				tmp_settings.sta_only != wifi_settings.sta_only ||
 				tmp_settings.sta_power_save != wifi_settings.sta_power_save ||
-				tmp_settings.ap_channel != wifi_settings.ap_channel
+				tmp_settings.ap_channel != wifi_settings.ap_channel ||
+				tmp_settings.sta_static_ip != wifi_settings.sta_static_ip ||
+				memcmp(&tmp_settings.sta_static_ip_config, &wifi_settings.sta_static_ip_config, sizeof(esp_netif_ip_info_t)) != 0
 				)
 		){
 			esp_err = nvs_set_blob(handle, "settings", &wifi_settings, sizeof(wifi_settings));
@@ -289,6 +292,7 @@ esp_err_t wifi_manager_save_sta_config(){
 			ESP_LOGD(TAG, "wifi_manager_wrote wifi_settings: SoftAP_bandwidth (1 = 20MHz, 2 = 40MHz): %i",wifi_settings.ap_bandwidth);
 			ESP_LOGD(TAG, "wifi_manager_wrote wifi_settings: sta_only (0 = APSTA, 1 = STA when connected): %i",wifi_settings.sta_only);
 			ESP_LOGD(TAG, "wifi_manager_wrote wifi_settings: sta_power_save (1 = yes): %i",wifi_settings.sta_power_save);
+			ESP_LOGD(TAG, "wifi_manager_wrote wifi_settings: sta_static_ip (0 = dhcp, 1 = static): %i",wifi_settings.sta_static_ip);
 		}
 
 		if(change){
@@ -400,7 +404,7 @@ void wifi_manager_generate_ip_info_json(update_reason_code_t update_reason_code)
 	wifi_config_t *config = wifi_manager_get_wifi_sta_config();
 	if(config){
 
-		const char *ip_info_json_format = ",\"ip\":\"%s\",\"netmask\":\"%s\",\"gw\":\"%s\",\"urc\":%d}\n";
+		const char *ip_info_json_format = ",\"ip\":\"%s\",\"netmask\":\"%s\",\"gw\":\"%s\",\"ip_mode\":\"%s\",\"urc\":%d}\n";
 
 		memset(ip_info_json, 0x00, JSON_IP_INFO_SIZE);
 
@@ -410,6 +414,10 @@ void wifi_manager_generate_ip_info_json(update_reason_code_t update_reason_code)
 
 		size_t ip_info_json_len = strlen(ip_info_json);
 		size_t remaining = JSON_IP_INFO_SIZE - ip_info_json_len;
+		
+		/* Determine IP mode string */
+		const char *ip_mode_str = wifi_settings.sta_static_ip ? "static" : "dhcp";
+		
 		if(update_reason_code == UPDATE_CONNECTION_OK){
 			/* rest of the information is copied after the ssid */
 			esp_netif_ip_info_t ip_info;
@@ -428,6 +436,7 @@ void wifi_manager_generate_ip_info_json(update_reason_code_t update_reason_code)
 					ip,
 					netmask,
 					gw,
+					ip_mode_str,
 					(int)update_reason_code);
 		}
 		else{
@@ -436,6 +445,7 @@ void wifi_manager_generate_ip_info_json(update_reason_code_t update_reason_code)
 								"0",
 								"0",
 								"0",
+								ip_mode_str,
 								(int)update_reason_code);
 		}
 	}
@@ -520,6 +530,86 @@ void wifi_manager_safe_update_sta_ip_string(uint32_t ip){
 
 char* wifi_manager_get_sta_ip_string(){
 	return wifi_manager_sta_ip;
+}
+
+/**
+ * @brief Set static IP configuration for STA interface
+ * @param ip IP address string (e.g., "192.168.1.100")
+ * @param netmask Netmask string (e.g., "255.255.255.0")
+ * @param gw Gateway string (e.g., "192.168.1.1")
+ * @return ESP_OK on success, ESP_FAIL on error
+ */
+esp_err_t wifi_manager_set_static_ip_config(const char* ip, const char* netmask, const char* gw){
+	if(ip == NULL || netmask == NULL || gw == NULL){
+		ESP_LOGE(TAG, "wifi_manager_set_static_ip_config: Invalid parameters");
+		return ESP_ERR_INVALID_ARG;
+	}
+
+	esp_netif_ip_info_t ip_info;
+	memset(&ip_info, 0x00, sizeof(ip_info));
+
+	/* Convert string IP addresses to binary format */
+	if(inet_pton(AF_INET, ip, &ip_info.ip) != 1){
+		ESP_LOGE(TAG, "wifi_manager_set_static_ip_config: Invalid IP address: %s", ip);
+		return ESP_ERR_INVALID_ARG;
+	}
+	if(inet_pton(AF_INET, netmask, &ip_info.netmask) != 1){
+		ESP_LOGE(TAG, "wifi_manager_set_static_ip_config: Invalid netmask: %s", netmask);
+		return ESP_ERR_INVALID_ARG;
+	}
+	if(inet_pton(AF_INET, gw, &ip_info.gw) != 1){
+		ESP_LOGE(TAG, "wifi_manager_set_static_ip_config: Invalid gateway: %s", gw);
+		return ESP_ERR_INVALID_ARG;
+	}
+
+	/* Stop DHCP client before setting static IP */
+	esp_err_t err = esp_netif_dhcpc_stop(esp_netif_sta);
+	if(err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED){
+		ESP_LOGE(TAG, "wifi_manager_set_static_ip_config: Failed to stop DHCP client: %s", esp_err_to_name(err));
+		return err;
+	}
+
+	/* Set static IP configuration */
+	err = esp_netif_set_ip_info(esp_netif_sta, &ip_info);
+	if(err != ESP_OK){
+		ESP_LOGE(TAG, "wifi_manager_set_static_ip_config: Failed to set IP info: %s", esp_err_to_name(err));
+		return err;
+	}
+
+	/* Save to wifi_settings for persistence */
+	wifi_settings.sta_static_ip = true;
+	memcpy(&wifi_settings.sta_static_ip_config, &ip_info, sizeof(esp_netif_ip_info_t));
+
+	/* Save configuration to NVS */
+	wifi_manager_save_sta_config();
+
+	/* Update IP string */
+	wifi_manager_safe_update_sta_ip_string(ip_info.ip.addr);
+
+	ESP_LOGI(TAG, "wifi_manager_set_static_ip_config: Static IP set - IP: %s, Netmask: %s, Gateway: %s", ip, netmask, gw);
+	return ESP_OK;
+}
+
+/**
+ * @brief Enable DHCP for STA interface
+ * @return ESP_OK on success, ESP_FAIL on error
+ */
+esp_err_t wifi_manager_enable_dhcp(){
+	esp_err_t err = esp_netif_dhcpc_start(esp_netif_sta);
+	if(err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED){
+		ESP_LOGE(TAG, "wifi_manager_enable_dhcp: Failed to start DHCP client: %s", esp_err_to_name(err));
+		return err;
+	}
+
+	/* Clear static IP flag */
+	wifi_settings.sta_static_ip = false;
+	memset(&wifi_settings.sta_static_ip_config, 0x00, sizeof(esp_netif_ip_info_t));
+
+	/* Save configuration to NVS */
+	wifi_manager_save_sta_config();
+
+	ESP_LOGI(TAG, "wifi_manager_enable_dhcp: DHCP enabled");
+	return ESP_OK;
 }
 
 
@@ -1025,22 +1115,25 @@ void wifi_manager( void * pvParameters ){
 
 				break;
 
-			case WM_ORDER_LOAD_AND_RESTORE_STA:
-				ESP_LOGI(TAG, "MESSAGE: ORDER_LOAD_AND_RESTORE_STA");
-				if(wifi_manager_fetch_wifi_sta_config()){
-					ESP_LOGI(TAG, "Saved wifi found on startup. Will attempt to connect.");
-					wifi_manager_send_message(WM_ORDER_CONNECT_STA, (void*)CONNECTION_REQUEST_RESTORE_CONNECTION);
-				}
-				else{
-					/* no wifi saved: start soft AP! This is what should happen during a first run */
-					ESP_LOGI(TAG, "No saved wifi found on startup. Starting access point.");
-					wifi_manager_send_message(WM_ORDER_START_AP, NULL);
-				}
+		case WM_ORDER_LOAD_AND_RESTORE_STA:
+			ESP_LOGI(TAG, "MESSAGE: ORDER_LOAD_AND_RESTORE_STA");
+			
+			/* MODIFIED: Luôn khởi động AP để có thể truy cập portal bất cứ lúc nào */
+			ESP_LOGI(TAG, "Starting access point for continuous portal access.");
+			wifi_manager_send_message(WM_ORDER_START_AP, NULL);
+			
+			if(wifi_manager_fetch_wifi_sta_config()){
+				ESP_LOGI(TAG, "Saved wifi found on startup. Will attempt to connect.");
+				wifi_manager_send_message(WM_ORDER_CONNECT_STA, (void*)CONNECTION_REQUEST_RESTORE_CONNECTION);
+			}
+			else{
+				ESP_LOGI(TAG, "No saved wifi found on startup.");
+			}
 
-				/* callback */
-				if(cb_ptr_arr[msg.code]) (*cb_ptr_arr[msg.code])(NULL);
+			/* callback */
+			if(cb_ptr_arr[msg.code]) (*cb_ptr_arr[msg.code])(NULL);
 
-				break;
+			break;
 
 			case WM_ORDER_CONNECT_STA:
 				ESP_LOGI(TAG, "MESSAGE: ORDER_CONNECT_STA");
@@ -1056,27 +1149,50 @@ void wifi_manager( void * pvParameters ){
 					xEventGroupSetBits(wifi_manager_event_group, WIFI_MANAGER_REQUEST_RESTORE_STA_BIT);
 				}
 
-				uxBits = xEventGroupGetBits(wifi_manager_event_group);
-				if( ! (uxBits & WIFI_MANAGER_WIFI_CONNECTED_BIT) ){
-					/* update config to latest and attempt connection */
-					ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, wifi_manager_get_wifi_sta_config()));
-
-					/* if there is a wifi scan in progress abort it first
-					   Calling esp_wifi_scan_stop will trigger a SCAN_DONE event which will reset this bit */
-					if(uxBits & WIFI_MANAGER_SCAN_BIT){
-						esp_wifi_scan_stop();
+			uxBits = xEventGroupGetBits(wifi_manager_event_group);
+			if( ! (uxBits & WIFI_MANAGER_WIFI_CONNECTED_BIT) ){
+				/* Apply static IP configuration if enabled */
+				if(wifi_settings.sta_static_ip){
+					ESP_LOGI(TAG, "Applying static IP configuration before connection");
+					esp_err_t err = esp_netif_dhcpc_stop(esp_netif_sta);
+					if(err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED){
+						ESP_LOGW(TAG, "Failed to stop DHCP client: %s", esp_err_to_name(err));
 					}
-					ESP_ERROR_CHECK(esp_wifi_connect());
+					err = esp_netif_set_ip_info(esp_netif_sta, &wifi_settings.sta_static_ip_config);
+					if(err != ESP_OK){
+						ESP_LOGE(TAG, "Failed to set static IP: %s", esp_err_to_name(err));
+					}
 				}
+				else{
+					ESP_LOGI(TAG, "DHCP mode enabled");
+					esp_err_t err = esp_netif_dhcpc_start(esp_netif_sta);
+					if(err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED){
+						ESP_LOGW(TAG, "Failed to start DHCP client: %s", esp_err_to_name(err));
+					}
+				}
+				
+				/* update config to latest and attempt connection */
+				ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, wifi_manager_get_wifi_sta_config()));
+
+				/* if there is a wifi scan in progress abort it first
+				   Calling esp_wifi_scan_stop will trigger a SCAN_DONE event which will reset this bit */
+				if(uxBits & WIFI_MANAGER_SCAN_BIT){
+					esp_wifi_scan_stop();
+				}
+				ESP_ERROR_CHECK(esp_wifi_connect());
+			}
 
 				/* callback */
 				if(cb_ptr_arr[msg.code]) (*cb_ptr_arr[msg.code])(NULL);
 
 				break;
 
-			case WM_EVENT_STA_DISCONNECTED:
-				;wifi_event_sta_disconnected_t* wifi_event_sta_disconnected = (wifi_event_sta_disconnected_t*)msg.param;
-				ESP_LOGI(TAG, "MESSAGE: EVENT_STA_DISCONNECTED with Reason code: %d", wifi_event_sta_disconnected->reason);
+		case WM_EVENT_STA_DISCONNECTED:
+			ESP_LOGI(TAG, "MESSAGE: EVENT_STA_DISCONNECTED");
+			wifi_event_sta_disconnected_t* wifi_event_sta_disconnected = (wifi_event_sta_disconnected_t*)msg.param;
+			if(wifi_event_sta_disconnected){
+				ESP_LOGI(TAG, "Reason code: %d", wifi_event_sta_disconnected->reason);
+			}
 
 				/* this even can be posted in numerous different conditions
 				 *
@@ -1138,17 +1254,38 @@ void wifi_manager( void * pvParameters ){
 					xTimerStop( wifi_manager_shutdown_ap_timer, (TickType_t)0 );
 				}
 
-				uxBits = xEventGroupGetBits(wifi_manager_event_group);
-				if( uxBits & WIFI_MANAGER_REQUEST_STA_CONNECT_BIT ){
-					/* there are no retries when it's a user requested connection by design. This avoids a user hanging too much
-					 * in case they typed a wrong password for instance. Here we simply clear the request bit and move on */
-					xEventGroupClearBits(wifi_manager_event_group, WIFI_MANAGER_REQUEST_STA_CONNECT_BIT);
+			uxBits = xEventGroupGetBits(wifi_manager_event_group);
+			if( uxBits & WIFI_MANAGER_REQUEST_STA_CONNECT_BIT ){
+				/* there are no retries when it's a user requested connection by design. This avoids a user hanging too much
+				 * in case they typed a wrong password for instance. Here we simply clear the request bit and move on */
+				xEventGroupClearBits(wifi_manager_event_group, WIFI_MANAGER_REQUEST_STA_CONNECT_BIT);
 
+				if(wifi_manager_lock_json_buffer( portMAX_DELAY )){
+					wifi_manager_generate_ip_info_json( UPDATE_FAILED_ATTEMPT );
+					wifi_manager_unlock_json_buffer();
+				}
+				
+				/* Start AP if not already started to allow user to try again */
+				if(! (uxBits & WIFI_MANAGER_AP_STARTED_BIT) ){
+					ESP_LOGI(TAG, "User connection failed, starting AP for retry");
+					wifi_manager_send_message(WM_ORDER_START_AP, NULL);
+				}
+
+			}
+				else if( uxBits & WIFI_MANAGER_REQUEST_RESTORE_STA_BIT ){
+					/* This is a restored connection attempt that failed. Start AP immediately to allow reconfiguration */
+					xEventGroupClearBits(wifi_manager_event_group, WIFI_MANAGER_REQUEST_RESTORE_STA_BIT);
+					
 					if(wifi_manager_lock_json_buffer( portMAX_DELAY )){
 						wifi_manager_generate_ip_info_json( UPDATE_FAILED_ATTEMPT );
 						wifi_manager_unlock_json_buffer();
 					}
-
+					
+					/* Start AP if not already started */
+					if(! (uxBits & WIFI_MANAGER_AP_STARTED_BIT) ){
+						ESP_LOGI(TAG, "Restored connection failed, starting AP for reconfiguration");
+						wifi_manager_send_message(WM_ORDER_START_AP, NULL);
+					}
 				}
 				else if (uxBits & WIFI_MANAGER_REQUEST_DISCONNECT_BIT){
 					/* user manually requested a disconnect so the lost connection is a normal event. Clear the flag and restart the AP */
@@ -1172,7 +1309,7 @@ void wifi_manager( void * pvParameters ){
 					wifi_manager_send_message(WM_ORDER_START_AP, NULL);
 				}
 				else{
-					/* lost connection ? */
+					/* lost connection during normal operation (not user request, not restore, not manual disconnect) */
 					if(wifi_manager_lock_json_buffer( portMAX_DELAY )){
 						wifi_manager_generate_ip_info_json( UPDATE_LOST_CONNECTION );
 						wifi_manager_unlock_json_buffer();
@@ -1180,9 +1317,6 @@ void wifi_manager( void * pvParameters ){
 
 					/* Start the timer that will try to restore the saved config */
 					xTimerStart( wifi_manager_retry_timer, (TickType_t)0 );
-
-					/* if it was a restore attempt connection, we clear the bit */
-					xEventGroupClearBits(wifi_manager_event_group, WIFI_MANAGER_REQUEST_RESTORE_STA_BIT);
 
 					/* if the AP is not started, we check if we have reached the threshold of failed attempt to start it */
 					if(! (uxBits & WIFI_MANAGER_AP_STARTED_BIT) ){
@@ -1204,7 +1338,11 @@ void wifi_manager( void * pvParameters ){
 
 				/* callback */
 				if(cb_ptr_arr[msg.code]) (*cb_ptr_arr[msg.code])( msg.param );
-				free(wifi_event_sta_disconnected);
+				
+				/* free allocated memory */
+				if(wifi_event_sta_disconnected){
+					free(wifi_event_sta_disconnected);
+				}
 
 				break;
 
@@ -1285,22 +1423,21 @@ void wifi_manager( void * pvParameters ){
 				/* bring down DNS hijack */
 				dns_server_stop();
 
-				/* start the timer that will eventually shutdown the access point
-				 * We check first that it's actually running because in case of a boot and restore connection
-				 * the AP is not even started to begin with.
-				 */
-				if(uxBits & WIFI_MANAGER_AP_STARTED_BIT){
-					TickType_t t = pdMS_TO_TICKS( WIFI_MANAGER_SHUTDOWN_AP_TIMER );
-
-					/* if for whatever reason user configured the shutdown timer to be less than 1 tick, the AP is stopped straight away */
-					if(t > 0){
-						xTimerStart( wifi_manager_shutdown_ap_timer, (TickType_t)0 );
-					}
-					else{
-						wifi_manager_send_message(WM_ORDER_STOP_AP, (void*)NULL);
-					}
-
-				}
+			/* MODIFIED: Giữ AP luôn bật để có thể truy cập portal bất cứ lúc nào
+			 * Comment out việc tắt AP tự động sau khi kết nối thành công
+			 * Điều này cho phép truy cập vào portal để xem IP ngay cả khi đã kết nối WiFi
+			 */
+			// if(uxBits & WIFI_MANAGER_AP_STARTED_BIT){
+			// 	TickType_t t = pdMS_TO_TICKS( WIFI_MANAGER_SHUTDOWN_AP_TIMER );
+			// 	if(t > 0){
+			// 		xTimerStart( wifi_manager_shutdown_ap_timer, (TickType_t)0 );
+			// 	}
+			// 	else{
+			// 		wifi_manager_send_message(WM_ORDER_STOP_AP, (void*)NULL);
+			// 	}
+			// }
+			
+			ESP_LOGI(TAG, "AP sẽ được giữ hoạt động để truy cập portal liên tục");
 
 				/* callback and free memory allocated for the void* param */
 				if(cb_ptr_arr[msg.code]) (*cb_ptr_arr[msg.code])( msg.param );

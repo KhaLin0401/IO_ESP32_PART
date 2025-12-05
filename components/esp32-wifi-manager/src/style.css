@@ -16,6 +16,16 @@ input {
     display: none;
     font: 1.1em tahoma, arial, sans-serif;
 }
+input[type="checkbox"],
+input[type="radio"] {
+    display: inline-block;
+    width: auto;
+    margin: 0;
+    cursor: pointer;
+}
+input[type="text"] {
+    display: block;
+}
 input:focus,
 select:focus,
 textarea:focus,
@@ -138,6 +148,39 @@ h3 {
     margin-left: 35px;
     padding: 10px 0px 10px 10px;
     display: block
+}
+/* IP Configuration Styles */
+#current-ip-display {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+#static-ip-input {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+#save-static-ip {
+    display: inline-block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+#ip-mode-selection {
+    display: block !important;
+}
+#ip-mode-selection label {
+    cursor: pointer;
+    display: flex !important;
+}
+#ip-mode-selection input[type="radio"] {
+    display: inline-block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+#static-ip-box,
+#current-ip-box {
+    margin-top: 0;
+    display: block !important;
 }
 .buttons {
     padding: 15px;

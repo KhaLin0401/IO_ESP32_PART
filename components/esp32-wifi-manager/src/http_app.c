@@ -65,6 +65,7 @@ static char* http_css_url = NULL;
 static char* http_connect_url = NULL;
 static char* http_ap_url = NULL;
 static char* http_status_url = NULL;
+static char* http_ip_config_url = NULL;
 
 /**
  * @brief embedded binary data.
@@ -84,6 +85,7 @@ const static char http_200_hdr[] = "200 OK";
 const static char http_302_hdr[] = "302 Found";
 const static char http_400_hdr[] = "400 Bad Request";
 const static char http_404_hdr[] = "404 Not Found";
+const static char http_500_hdr[] = "500 Internal Server Error";
 const static char http_503_hdr[] = "503 Service Unavailable";
 const static char http_location_hdr[] = "Location";
 const static char http_content_type_html[] = "text/html";
@@ -191,6 +193,150 @@ static esp_err_t http_server_post_handler(httpd_req_t *req){
 			httpd_resp_send(req, NULL, 0);
 		}
 
+	}
+	/* POST /ip-config.json */
+	else if(strcmp(req->uri, http_ip_config_url) == 0){
+		/* Read request body */
+		size_t content_len = req->content_len;
+		if(content_len == 0 || content_len > 512){ /* Limit to 512 bytes */
+			httpd_resp_set_status(req, http_400_hdr);
+			httpd_resp_send(req, NULL, 0);
+			return ESP_OK;
+		}
+
+		char *buf = malloc(content_len + 1);
+		if(buf == NULL){
+			httpd_resp_set_status(req, http_500_hdr);
+			httpd_resp_send(req, NULL, 0);
+			return ESP_ERR_NO_MEM;
+		}
+
+		int ret = httpd_req_recv(req, buf, content_len);
+		if(ret <= 0){
+			free(buf);
+			httpd_resp_set_status(req, http_400_hdr);
+			httpd_resp_send(req, NULL, 0);
+			return ESP_OK;
+		}
+		buf[ret] = '\0';
+
+		/* Parse JSON: {"mode":"static","ip":"192.168.1.100","netmask":"255.255.255.0","gw":"192.168.1.1"} */
+		/* Simple JSON parsing - looking for key-value pairs */
+		char *mode = NULL;
+		char *ip = NULL;
+		char *netmask = NULL;
+		char *gw = NULL;
+
+		/* Find mode */
+		char *mode_ptr = strstr(buf, "\"mode\"");
+		if(mode_ptr){
+			mode_ptr = strstr(mode_ptr, ":");
+			if(mode_ptr){
+				mode_ptr++; /* Skip ':' */
+				while(*mode_ptr == ' ' || *mode_ptr == '\"') mode_ptr++;
+				char *mode_end = strstr(mode_ptr, "\"");
+				if(mode_end){
+					int mode_len = mode_end - mode_ptr;
+					mode = malloc(mode_len + 1);
+					strncpy(mode, mode_ptr, mode_len);
+					mode[mode_len] = '\0';
+				}
+			}
+		}
+
+		/* Find IP */
+		char *ip_ptr = strstr(buf, "\"ip\"");
+		if(ip_ptr){
+			ip_ptr = strstr(ip_ptr, ":");
+			if(ip_ptr){
+				ip_ptr++; /* Skip ':' */
+				while(*ip_ptr == ' ' || *ip_ptr == '\"') ip_ptr++;
+				char *ip_end = strstr(ip_ptr, "\"");
+				if(ip_end){
+					int ip_len = ip_end - ip_ptr;
+					ip = malloc(ip_len + 1);
+					strncpy(ip, ip_ptr, ip_len);
+					ip[ip_len] = '\0';
+				}
+			}
+		}
+
+		/* Find netmask */
+		char *netmask_ptr = strstr(buf, "\"netmask\"");
+		if(netmask_ptr){
+			netmask_ptr = strstr(netmask_ptr, ":");
+			if(netmask_ptr){
+				netmask_ptr++; /* Skip ':' */
+				while(*netmask_ptr == ' ' || *netmask_ptr == '\"') netmask_ptr++;
+				char *netmask_end = strstr(netmask_ptr, "\"");
+				if(netmask_end){
+					int netmask_len = netmask_end - netmask_ptr;
+					netmask = malloc(netmask_len + 1);
+					strncpy(netmask, netmask_ptr, netmask_len);
+					netmask[netmask_len] = '\0';
+				}
+			}
+		}
+
+		/* Find gateway */
+		char *gw_ptr = strstr(buf, "\"gw\"");
+		if(gw_ptr){
+			gw_ptr = strstr(gw_ptr, ":");
+			if(gw_ptr){
+				gw_ptr++; /* Skip ':' */
+				while(*gw_ptr == ' ' || *gw_ptr == '\"') gw_ptr++;
+				char *gw_end = strstr(gw_ptr, "\"");
+				if(gw_end){
+					int gw_len = gw_end - gw_ptr;
+					gw = malloc(gw_len + 1);
+					strncpy(gw, gw_ptr, gw_len);
+					gw[gw_len] = '\0';
+				}
+			}
+		}
+
+		/* Apply configuration */
+		esp_err_t err = ESP_OK;
+		if(mode && strcmp(mode, "dhcp") == 0){
+			err = wifi_manager_enable_dhcp();
+			ESP_LOGI(TAG, "IP config: DHCP enabled");
+		}
+		else if(mode && strcmp(mode, "static") == 0){
+			if(ip && netmask && gw){
+				err = wifi_manager_set_static_ip_config(ip, netmask, gw);
+				ESP_LOGI(TAG, "IP config: Static IP - IP: %s, Netmask: %s, Gateway: %s", ip, netmask, gw);
+			}
+			else{
+				err = ESP_ERR_INVALID_ARG;
+				ESP_LOGE(TAG, "IP config: Missing IP, netmask or gateway for static IP");
+			}
+		}
+		else{
+			err = ESP_ERR_INVALID_ARG;
+			ESP_LOGE(TAG, "IP config: Invalid mode or missing parameters");
+		}
+
+		/* Free allocated memory */
+		free(buf);
+		if(mode) free(mode);
+		if(ip) free(ip);
+		if(netmask) free(netmask);
+		if(gw) free(gw);
+
+		/* Send response */
+		if(err == ESP_OK){
+			httpd_resp_set_status(req, http_200_hdr);
+			httpd_resp_set_type(req, http_content_type_json);
+			httpd_resp_set_hdr(req, http_cache_control_hdr, http_cache_control_no_cache);
+			httpd_resp_set_hdr(req, http_pragma_hdr, http_pragma_no_cache);
+			httpd_resp_send(req, "{\"status\":\"ok\"}", -1);
+		}
+		else{
+			httpd_resp_set_status(req, http_400_hdr);
+			httpd_resp_send(req, NULL, 0);
+		}
+
+		return ESP_OK;
 	}
 	else{
 
@@ -438,6 +584,7 @@ void http_app_start(bool lru_purge_enable){
 			const char page_connect[] = "connect.json";
 			const char page_ap[] = "ap.json";
 			const char page_status[] = "status.json";
+			const char page_ip_config[] = "ip-config.json";
 
 			/* root url, eg "/"   */
 			const size_t http_root_url_sz = sizeof(char) * (root_len+1);
@@ -463,6 +610,7 @@ void http_app_start(bool lru_purge_enable){
 			http_connect_url = http_app_generate_url(page_connect);
 			http_ap_url = http_app_generate_url(page_ap);
 			http_status_url = http_app_generate_url(page_status);
+			http_ip_config_url = http_app_generate_url(page_ip_config);
 
 		}
 

@@ -28,6 +28,50 @@
 					<h2>or choose a network...</h2>
 					<section id="wifi-list">
 					</section>
+					
+					<!-- IP Configuration Section -->
+					<h2>IP Configuration</h2>
+					<section id="ip-mode-selection">
+						<div style="display: flex !important; gap: 20px; padding: 10px;">
+							<label style="display: flex !important; align-items: center; gap: 5px;">
+								<input type="radio" name="ip-mode" id="static-mode" value="static" style="display: inline-block !important; visibility: visible !important; opacity: 1 !important; width: auto !important; margin: 0 !important;">
+								<span>Static IP</span>
+							</label>
+							<label style="display: flex !important; align-items: center; gap: 5px;">
+								<input type="radio" name="ip-mode" id="dhcp-mode" value="dhcp" checked style="display: inline-block !important; visibility: visible !important; opacity: 1 !important; width: auto !important; margin: 0 !important;">
+								<span>DHCP</span>
+							</label>
+						</div>
+					</section>
+					
+					<!-- Current IP Box -->
+					<section id="current-ip-box">
+						<div class="ape">
+							<label>Current IP</label>
+							<input id="current-ip-display" type="text" readonly value="Not connected" style="display: block !important; visibility: visible !important; opacity: 1 !important; background-color: #f0f0f0; border: none; width: 80%; margin-left: 35px; padding: 10px 0px 10px 10px;">
+						</div>
+					</section>
+					
+					<!-- Static IP Box -->
+					<section id="static-ip-box">
+						<div class="ape" style="display: flex; align-items: center; gap: 10px;">
+							<label style="min-width: 100px;">Static IP</label>
+							<input id="static-ip-input" type="text" placeholder="192.168.1.100" value="" style="display: block !important; visibility: visible !important; opacity: 1 !important; border: none; flex: 1; padding: 10px 0px 10px 10px; background-color: #fff;">
+							<input id="save-static-ip" type="button" value="Save" style="display: inline-block !important; visibility: visible !important; opacity: 1 !important; margin-right: 20px; padding: 10px 20px; cursor: pointer;" />
+						</div>
+					</section>
+					
+					<h2>Instructions</h2>
+					<section>
+						<div class="ape">
+							<p style="margin: 0; padding: 10px; font-size: 0.9em; color: #666;">
+								<strong>DHCP:</strong> Automatically obtain IP address from router.<br>
+								<strong>Static IP:</strong> Manually set IP address (format: 192.168.1.100).<br>
+								Gateway will be auto-configured as x.x.x.1
+							</p>
+						</div>
+					</section>
+					
 					<div id="pwrdby"><em>Powered by </em><a id="acredits" href="#"><strong>esp32-wifi-manager</strong></a>.</div>
 				</div>
 				<div id="connect_manual">
